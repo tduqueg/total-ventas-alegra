@@ -1,0 +1,23 @@
+name: Alegra → Supabase sync
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # 09:00 UTC = 04:00 America/Bogota
+    - cron: "0 9 * * *"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install requests psycopg2-binary
+      - name: Run ETL
+        env:
+          ALEGRA_EMAIL: ${{ secrets.ALEGRA_EMAIL }}
+          ALEGRA_TOKEN: ${{ secrets.ALEGRA_TOKEN }}
+          SUPABASE_PG_CONN: ${{ secrets.SUPABASE_PG_CONN }}
+          LOOKBACK_DAYS: "400"
+        run: python total_ventas_alegra.py
