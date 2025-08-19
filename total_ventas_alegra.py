@@ -69,25 +69,97 @@ def _to_num(v):
         return None if v is None else float(v)
     except Exception:
         return v
+def coalesce_num(*vals):
+    """
+    Devuelve el primer valor no-None convertido a float, preservando ceros.
+    """
+    for v in vals:
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except Exception:
+            try:
+                return float(str(v).replace(",", "."))
+            except Exception:
+                continue
+    return None
+
+def compute_total(doc, subtotal, tax):
+    # 1) total directo
+    t = coalesce_num(doc.get("total"), doc.get("totalAmount"))
+    if t is not None:
+        return t
+    # 2) subtotal + tax (preserva tax=0)
+    if subtotal is not None and tax is not None:
+        try:
+            return round(float(subtotal) + float(tax), 2)
+        except Exception:
+            pass
+    # 3) Reconstrucción por ítems
+    items = doc.get("items") or []
+    if isinstance(items, list) and items:
+        tot = 0.0
+        for it in items:
+            qty = coalesce_num(it.get("quantity"), it.get("qty")) or 0.0
+            price = coalesce_num(it.get("price"), it.get("unitPrice")) or 0.0
+            line = qty * price
+
+            line_tax = 0.0
+            taxes = it.get("taxes") or it.get("tax") or []
+            if isinstance(taxes, list):
+                for t in taxes:
+                    perc = coalesce_num((t or {}).get("percentage"))
+                    if perc is not None:
+                        line_tax += line * (perc / 100.0)
+                    else:
+                        amt = coalesce_num((t or {}).get("amount"))
+                        if amt is not None:
+                            line_tax += amt
+            elif isinstance(taxes, dict):
+                perc = coalesce_num(taxes.get("percentage"))
+                if perc is not None:
+                    line_tax += line * (perc / 100.0)
+
+            tot += line + line_tax
+        return round(tot, 2)
+
+    # 4) fallback final
+    return 0.0
 
 def normalize(doc, doc_type):
-    # Campos comunes estimados por la API (ajusta si en tu cuenta difieren)
+
     status = (doc.get("status") or doc.get("state") or "").lower()
-    canceled = status in ("void","anulada")
+    canceled = status in ("void", "anulada")
+
+
+    issue_date = doc.get("date")
+    if not issue_date:
+
+        fallback_dt = doc.get("createdAt") or doc.get("updatedAt") or doc.get("lastUpdated")
+        if isinstance(fallback_dt, str) and len(fallback_dt) >= 10:
+            issue_date = fallback_dt[:10]
+        else:
+            issue_date = date.today().isoformat()
+
+    subtotal = coalesce_num(doc.get("subtotal"), doc.get("subtotalAmount"))
+    tax      = coalesce_num(doc.get("tax"),      doc.get("taxAmount"))
+    total    = compute_total(doc, subtotal, tax)
+
     return {
         "alegra_id": int(doc["id"]),
         "doc_type": doc_type,
         "status": status,
         "number": doc.get("number"),
         "currency": (doc.get("currency") or {}).get("code") if isinstance(doc.get("currency"), dict) else doc.get("currency"),
-        "issue_date": doc.get("date"),
+        "issue_date": issue_date,
         "created_at": doc.get("createdAt"),
         "updated_at": doc.get("updatedAt") or doc.get("lastUpdated"),
         "client_id": (doc.get("client") or {}).get("id") if isinstance(doc.get("client"), dict) else None,
         "client_name": (doc.get("client") or {}).get("name") if isinstance(doc.get("client"), dict) else None,
-        "subtotal": _to_num(doc.get("subtotal") or doc.get("subtotalAmount")),
-        "tax": _to_num(doc.get("tax") or doc.get("taxAmount")),
-        "total": _to_num(doc.get("total") or doc.get("totalAmount")),
+        "subtotal": subtotal,
+        "tax": tax,            
+        "total": total,         
         "canceled": canceled,
         "raw": doc,
     }
